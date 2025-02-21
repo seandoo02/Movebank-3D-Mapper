@@ -11,10 +11,20 @@ library(scales)
 library(sf)
 library(rstac)
 library(dplyr)
-library(ctmm)x
-return(bbox)
+library(ctmm)
 ```
-
+# make_bbox
+```{r}
+# Creates a bounding box for a movment bank formated dataframe
+make_bbox=function(df){
+  bbox=c()
+  bbox[[1]]=min(df$location.long, na.rm=TRUE) #west
+  bbox[[2]]= min(df$location.lat, na.rm=TRUE)#south
+  bbox[[3]]= max(df$location.long, na.rm=TRUE)#east
+  bbox[[4]]= max(df$location.lat, na.rm=TRUE)#north
+  return(bbox)
+}
+```
 
 
 # get_landsat
@@ -110,7 +120,7 @@ make_landsat_rgb=function(landsat_obj, min_cloud_index){
   landsat_rgb <- raster::stack(landsat_r, landsat_g, landsat_b)
 
   # Force loading into memory
-  landsat_rgb <- raster::calc(landsat_rgb, sqrt, filename = "landsat_rgb.tif", overwrite = TRUE)
+  landsat_rgb <- sqrt(landsat_rgb)
   
   return(landsat_rgb)
 }
@@ -457,7 +467,7 @@ if(length(landsat_tiles)>1){
 }
 
 
-#merged_rgb=mosaic(landsat_tiles_raster_list, fun=mean)
+
 raster::plotRGB(merged_rgb)
 ```
 
@@ -491,6 +501,7 @@ landsat_rgb_contrast = scales::rescale(landsat_rgb_array,to=c(0,1))
 ```{r}
 rayshader::plot_map(landsat_rgb_contrast)
 ```
+
 ```{r}
 landsat_rgb_cropped=raster::brick(landsat_rgb_contrast)
 extent(landsat_rgb_cropped)=e
@@ -697,10 +708,11 @@ hillshade_rgb_array[,,3] = tiff_image[,,3]#Green layer
 
 #hillshade_rgb_array = aperm(hillshade_rgb_array, c(2,1,3))
 ```
+
+
 ```{r}
-
-
 plotRGB(landsat_rgb_cropped,r=1,g=2,b=3,scale=maxValue(landsat_rgb_cropped))
+
 j=1
 for(i in 1:length(akde_list_sorted)){
   individual_CI= akde_list_sorted[[i]]$CI
@@ -711,17 +723,32 @@ for(i in 1:length(akde_list_sorted)){
   individual_CDF=akde_list_sorted[[i]]$CDF
   individual_CDF_utm=raster::projectRaster(individual_CDF,landsat_rgb_cropped,method='bilinear')
   #set to correct CRS
-  CDF_resampled=individual_CDF_utm
-  CDF_resampled$layer[CDF_resampled$layer < .01] <- NA
-  CDF_array <- as.array(CDF_resampled)
+
+  individual_CDF_utm$layer[individual_CDF_utm$layer < .01] <- NA
+  CDF_array <- as.array(individual_CDF_utm)
   color=hcl.pals(type=NULL)[color_index[i]]
   hue=head(sequential_hcl(n=20, sequential_hues[test_index[j]]),-3)
-  raster::plot(1-CDF_resampled$layer, add = TRUE, alpha = .5,col=hue,legend=FALSE)
+  raster::plot(1-individual_CDF_utm$layer, add = TRUE, alpha = .5,col=hue,legend=FALSE)
   j=j+1
 }
 
+saved_plot=recordPlot()
+dev.off()
+
+replayPlot(saved_plot)
+
+# tiff("landsat_with_overlay.tiff",
+#    width = ncol(base_raster),   # Width of the image in pixels
+#    height = nrow(base_raster), # Height of the image in pixels
+#    compression = "none")
+# 
+# replayPlot(saved_plot)
+# 
+# dev.off()
 
 ```
+
+
 
 ```{r}
 
