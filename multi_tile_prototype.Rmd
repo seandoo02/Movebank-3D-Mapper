@@ -1,5 +1,4 @@
 ```{r}
-#test
 library(colorspace)
 library(rayimage)
 library(readxl) 
@@ -13,9 +12,10 @@ library(rstac)
 library(dplyr)
 library(ctmm)
 ```
+
 # make_bbox
 ```{r}
-# Creates a bounding box for a movment bank formated dataframe
+# Creates a bounding box for a movement bank formatted dataframe
 make_bbox=function(df){
   bbox=c()
   bbox[[1]]=min(df$location.long, na.rm=TRUE) #west
@@ -26,6 +26,83 @@ make_bbox=function(df){
 }
 ```
 
+# find landsat tiles that cover the bounding box
+```{r}
+#touch at you own peril
+merge_tiles=function(df_bbox){
+  # Step 1: Define bounding box coordinates
+  xmin = df_bbox[[1]]
+  xmax = df_bbox[[3]]
+  ymin = df_bbox[[2]]
+  ymax = df_bbox[[4]]
+  
+  # Step 2: Create a matrix with the 4 corners, closing the loop
+  bounding_box_coords <- matrix(c(xmin, ymin,  # bottom-left
+                                  xmax, ymin,  # bottom-right
+                                  xmax, ymax,  # top-right
+                                  xmin, ymax,  # top-left
+                                  xmin, ymin), # closing the loop back to bottom-left
+                                ncol = 2, byrow = TRUE)
+  
+  # Step 3: Create a polygon geometry using the coordinates
+  bounding_box_polygon <- st_polygon(list(bounding_box_coords))
+  
+  # Step 4: Read shapefile and convert to sf object
+  tiles = sf::read_sf("WRS2_descending_0/WRS2_descending.shp")
+  
+  # Assuming that the shapefile already has geometry columns, no need for coords parameter
+  tiles_sf = st_as_sf(tiles, crs = st_crs(map))
+  
+  # Step 5: Loop over geometries and check if they cover the bounding box polygon
+  tiles_sf$cover_area=0
+  paths_rows = list()
+  
+  for (i in 1:length(tiles_sf$geometry)) {
+    
+    temp_intersection=st_intersection(bounding_box_polygon, tiles_sf$geometry[[i]])
+    if(length(temp_intersection)==1){
+      #print("the tile is on the bbox")
+      cover_area=st_area(temp_intersection)
+      tiles_sf$cover_area[[i]]=cover_area
+      
+      if(cover_area==st_area(bounding_box_polygon)){
+        print("the tile completly covers the bbox")
+        
+        # Append a list containing path and row to the paths_rows list
+        merged_tile=tiles_sf$geometry[[i]]
+        path = tiles_sf$PATH[[i]]
+        row = tiles_sf$ROW[[i]]
+        paths_rows = append(paths_rows, list(list(path, row)))
+        return(list(merged_tile, paths_rows))
+        break
+      }
+    }
+  }
+  
+  if(length(paths_rows)>0){
+    print("done")
+  } else{
+    #print("not done")
+    tiles_sf=tiles_sf[order(tiles_sf$cover_area, decreasing = TRUE),]
+    i=2
+    merged_tile=tiles_sf$geometry[[1]]
+    path = tiles_sf$PATH[[1]]
+    row = tiles_sf$ROW[[1]]
+    paths_rows = append(paths_rows, list(list(path, row)))
+    while(cover_area!=st_area(bounding_box_polygon)){
+      path = tiles_sf$PATH[[i]]
+      row = tiles_sf$ROW[[i]]
+      paths_rows = append(paths_rows, list(list(path, row)))
+      merged_tile=st_union(merged_tile, tiles_sf$geometry[[i]])
+      merged_intersection=st_intersection(bounding_box_polygon, merged_tile)
+      cover_area=st_area(merged_intersection)
+      #print(paste0(i," tiles added"))
+      i=i+1
+    }
+  }
+return(list(merged_tile, paths_rows))
+}
+```
 
 # get_landsat
 ```{r}
@@ -76,7 +153,6 @@ make_time_interval=function(df){
 ```
 
 # find_min_cloud
-
 ```{r}
 # finds the index of the landsat object that has the least cloud coverage with in the time interval
 find_min_cloud=function(landsat_obj,indexes_of_intrest){
@@ -130,11 +206,8 @@ make_landsat_rgb=function(landsat_obj, min_cloud_index){
 ```{r}
 #crops both the landsat raster and the nasadem rasters to the size of the bounding box created from the data frame
 crop_rasters=function(e, landsat_rbg, elevation_utm){
-  #print("in")
   landsat_rgb_cropped = raster::crop(landsat_rbg , e)
- # print("landsat is cropped")
   elevation_cropped = raster::crop(elevation_utm, e)
- # print("elevation is cropped")
 
   names(landsat_rgb_cropped) = c("r","g","b")
 
@@ -152,24 +225,15 @@ crop_rasters=function(e, landsat_rbg, elevation_utm){
   landsat_rgb_array[,,3] = landsat_b_cropped/255 #Green layer
   
 
-  
-
   landsat_rgb_array = aperm(landsat_rgb_array, c(2,1,3))
   
-  #plot the raster brick
-  #landsat_rgb_raster=raster::brick(landsat_rgb_array)
-  #raster::plotRGB(landsat_rgb_raster, r = 1, g =2 , b = 3, stretch = "lin")
-  #raster::plotRGB(landsat_rgb_raster)
-  #rayimage::plot_image(landsat_rgb_array)
-  # Set interpolate = TRUE for smoothing
-
   return(list(landsat_rgb_array, elevation_cropped, elevation_matrix))
 } 
 ```
 
 # merge_nasadem_rasters
 ```{r}
-#merges the  rasters for the nasadem when there are more than one tile
+#merges the rasters for the nasadem when there are more than one tile
 merge_nasadem_rasters=function(nasadem_obj){
   if (length(nasadem_obj$features)==1){
     elevation_data=raster::raster(nasadem_obj$features[[1]]$assets$elevation$href)
@@ -203,7 +267,7 @@ get_extent_utm=function(df_bbox,elevation_data){
 
 # make_color_vector
 ```{r}
-#the render_point method in the rayshader package needs a color vetor where each entrie coresponds to a point that will be ploted
+#the render_point method in the rayshader package needs a color vector where each entire corresponds to a point that will be plotted
 make_color_vector=function(df){
   df=df%>%arrange(desc(timestamp))
   
@@ -223,7 +287,7 @@ make_color_vector=function(df){
 
 # convert_location_data_to_utm
 ```{r}
-# converts the data frame lat long to the same CRS that is being ploted with the rayshader plot 3d method
+# converts the data frame lat long to the same CRS that is being plotted with the rayshader plot 3d method
 convert_location_data_to_utm=function(df, elevation_cropped){
   
   locations <- df%>%select(location.long,location.lat)
@@ -233,7 +297,7 @@ convert_location_data_to_utm=function(df, elevation_cropped){
   crs_utm <- crs(elevation_cropped)
   coords_utm <- SpatialPoints(spTransform(coords, crs_utm))
   
-  utm_lats=c() #ik this is a terible variable name 
+  utm_lats=c() #Ik the variable name is not good
   utm_longs=c()
   
   for(i in 1:length(coords_utm)){
@@ -244,9 +308,9 @@ convert_location_data_to_utm=function(df, elevation_cropped){
 }
 ```
 
+# fit the akde
 ```{r}
-akde=function(df, individual){
-  df_telemetry=ctmm::as.telemetry(df)
+akde=function(df_telemetry, individual){
   individual_df=df_telemetry[[individual]]
   # Calculate an automated model guesstimate:
   GUESS1 <- ctmm.guess(individual_df, interactive = FALSE)
@@ -304,131 +368,32 @@ df=read.csv("movebank_data/Movement patterns of seed dispersing spotted nutcrack
 
 # main body
 ```{r}
+#make bounding box
 df_bbox=make_bbox(df)
-```
 
-```{r}
-df_bbox
-```
+#make merged tile polygon and return the rows and paths of the Landsat tiles that cover the study bounding box
+temp=merge_tiles(df_bbox)
+merged_tile=temp[[1]]
+paths_rows=temp[[2]]
 
-```{r}
-# paths_rows=get_path_row(df_bbox)
-# print(paths_rows)
-```
-```{r}
-# Step 1: Define bounding box coordinates
-  xmin = df_bbox[[1]]
-  xmax = df_bbox[[3]]
-  ymin = df_bbox[[2]]
-  ymax = df_bbox[[4]]
-  
-  # Step 2: Create a matrix with the 4 corners, closing the loop
-  bounding_box_coords <- matrix(c(xmin, ymin,  # bottom-left
-                                  xmax, ymin,  # bottom-right
-                                  xmax, ymax,  # top-right
-                                  xmin, ymax,  # top-left
-                                  xmin, ymin), # closing the loop back to bottom-left
-                                ncol = 2, byrow = TRUE)
-  
-  # Step 3: Create a polygon geometry using the coordinates
-  bounding_box_polygon <- st_polygon(list(bounding_box_coords))
-  
-  # Step 4: Read shapefile and convert to sf object
-  tiles = sf::read_sf("WRS2_descending_0/WRS2_descending.shp")
-  
-  # Assuming that the shapefile already has geometry columns, no need for coords parameter
-  tiles_sf = st_as_sf(tiles, crs = st_crs(map))
-  
-  # Initialize an empty list to store path-row pairs
-
-```
-
-
-
-
-```{r}
-# Step 5: Loop over geometries and check if they cover the bounding box polygon
-tiles_sf$cover_area=0
-paths_rows = list()
-  for (i in 1:length(tiles_sf$geometry)) {
-    
-    temp_intersection=st_intersection(bounding_box_polygon, tiles_sf$geometry[[i]])
-    if(length(temp_intersection)==1){
-      #print("the tile is on the bbox")
-      cover_area=st_area(temp_intersection)
-      tiles_sf$cover_area[[i]]=cover_area
-      
-      if(cover_area==st_area(bounding_box_polygon)){
-        print("the tile completly covers the bbox")
-        
-        # Append a list containing path and row to the paths_rows list
-        merged_tile=tiles_sf$geometry[[i]]
-        path = tiles_sf$PATH[[i]]
-        row = tiles_sf$ROW[[i]]
-        paths_rows = append(paths_rows, list(list(path, row)))
-        break
-      }
-    }
-  }
-  
-if(length(paths_rows)>0){
-  print("done")
-} else{
-  print("not done")
-  tiles_sf=tiles_sf[order(tiles_sf$cover_area, decreasing = TRUE),]
-  i=2
-  merged_tile=tiles_sf$geometry[[1]]
-  path = tiles_sf$PATH[[1]]
-  row = tiles_sf$ROW[[1]]
-  paths_rows = append(paths_rows, list(list(path, row)))
-  while(cover_area!=st_area(bounding_box_polygon)){
-    path = tiles_sf$PATH[[i]]
-    row = tiles_sf$ROW[[i]]
-    paths_rows = append(paths_rows, list(list(path, row)))
-    merged_tile=st_union(merged_tile, tiles_sf$geometry[[i]])
-    merged_intersection=st_intersection(bounding_box_polygon, merged_tile)
-    cover_area=st_area(merged_intersection)
-    print(paste0(i," tiles added"))
-    i=i+1
-  }
-}
-
-
-```
-```{r}
+#plot the tiles
 plot(merged_tile)
 plot(bounding_box_polygon, add=TRUE)
 ```
 
+
 ```{r}
+# get data from the nasa digital elevation model that covers bounding box
 nasadem_obj=get_nasadem(df_bbox)
-```
-
-```{r}
-nasadem_obj
-```
-```{r}
 elevation_data=merge_nasadem_rasters(nasadem_obj)
-```
 
-
-```{r}
+#make time interval form start to end of study
 time_interval=make_time_interval(df)
-```
 
-```{r}
+# get landsat api end point
 landsat_obj=get_landsat(df_bbox, time_interval)
-```
 
-```{r}
-paths_rows
-```
-
-```{r}
-paths_rows[1]
-```
-
-```{r}
+#This nested for loop will find the lansat rasters that have the min cloud cover over the study area
 min_cloud_of_intrest=list()
 for(i in 1:length(paths_rows)){
   path=paths_rows[[i]][[1]]
@@ -439,23 +404,20 @@ for(i in 1:length(paths_rows)){
       indexes_of_intrest=append(indexes_of_intrest,j)
     }
   }
-  #print(indexes_of_intrest)
   min_cloud_index=find_min_cloud(landsat_obj,indexes_of_intrest)
-  min_cloud_of_intrest=append(min_cloud_of_intrest,min_cloud_index)
-  #print("___________")
+  min_cloud_indices=append(min_cloud_of_intrest,min_cloud_index)
 }
-print(min_cloud_of_intrest)
-```
 
 
-```{r}
+# load the rgb rasters
 landsat_tiles=list()
-for(i in min_cloud_of_intrest){
+for(i in min_cloud_indices){
   temp_rgb_raster=make_landsat_rgb(landsat_obj, i)
   
   landsat_tiles = append(landsat_tiles, temp_rgb_raster)
 }
 
+# Merge the rgb rasters into one large raster
 if(length(landsat_tiles)>1){
   names(landsat_tiles)[1:2] <- c('x', 'y')
   landsat_tiles$fun <- mean
@@ -466,75 +428,50 @@ if(length(landsat_tiles)>1){
   merged_rgb=landsat_tiles[[1]]
 }
 
-
-
+#plot the raster
 raster::plotRGB(merged_rgb)
 ```
 
 
 ```{r}
+#convert the crs of the elevation data to the landsat raster data crs
 elevation_utm=raster::projectRaster(elevation_data, merged_rgb , crs=crs(merged_rgb , asText=TRUE), method='bilinear')
-```
 
-```{r}
+#convert the extent of bounding box of the study from lat,long to UTM
 e=get_extent_utm(df_bbox, elevation_data)
-```
 
-```{r}
-e
-```
-
-```{r}
+# cropt the elevation raster and landsat raster to the size of the study area
 cropped_list=crop_rasters(e, merged_rgb, elevation_utm)
 landsat_rgb_array=cropped_list[[1]]
 elevation_cropped=cropped_list[[2]]
 elevation_matrix=cropped_list[[3]]
 
-#plot cropped rgb landsat data
-rayshader::plot_map(landsat_rgb_array)
-```
 
-```{r}
+# increase the contrast of the RGB landsat raster
 landsat_rgb_contrast = scales::rescale(landsat_rgb_array,to=c(0,1))
-```
 
-```{r}
-rayshader::plot_map(landsat_rgb_contrast)
-```
-
-```{r}
+#make raster brick for the RGB 
 landsat_rgb_cropped=raster::brick(landsat_rgb_contrast)
-extent(landsat_rgb_cropped)=e
-print(dim(landsat_rgb_cropped))
-print(class(landsat_rgb_cropped))
-print(extent(landsat_rgb_cropped))
-```
+extent(landsat_rgb_cropped)=e #set extent 
+crs(landsat_rgb_cropped)=crs(merged_rgb, asText=TRUE) #set CRS
 
-
-
-
-```{r}
+#plot the cropped raster
 plotRGB(landsat_rgb_cropped, r = 1, g = 2, b = 3, scale = maxValue(landsat_rgb_cropped))
 ```
 
 
-```{r}
-crs(landsat_rgb_cropped)=crs(merged_rgb, asText=TRUE)
-```
 
 ```{r}
-crs(landsat_rgb_cropped,asText=TRUE)
-```
-
-```{r}
-inividuals=unique(df$individual.local.identifier)[1:8]
-#This takes so long
+inividuals=unique(df$individual.local.identifier)[1:5]
 #inividuals=unique(df$individual.local.identifier)
+#This takes so long
+
+df_telemetry=ctmm::as.telemetry(df)
 akde_list=c()
 i=1
 for(n in inividuals){
   print(n)
-  akde_list[[i]]=akde(df,n)
+  akde_list[[i]]=akde(df_telemetry,n)
   i=i+1
 }
 ```
@@ -569,144 +506,6 @@ for(i in index_list){
   hue=head(sequential_hcl(n=10, sequential_hues[test_index[i]]),-3)
   raster::plot(1-akde_list[[i]]$CDF$layer, alpha=.5, col = hue ,legend=FALSE)
 }
-```
-
-```{r}
-temp=matrix(data=1, nrow=dim(landsat_rgb_cropped)[[1]],ncol=dim(landsat_rgb_cropped)[[2]])
-r=raster(temp)
-r3=raster::stack(r,r,r)
-extent(r3)=extent(landsat_rgb_cropped)
-crs(r3)=crs(landsat_rgb_cropped)
-plotRGB(r3,scale=max(1))
-individual_CI= akde_list_sorted[[1]]$CI
-individual_CI_utm=sf::st_transform(individual_CI,crs(landsat_rgb_cropped))
-plot(individual_CI_utm,add=TRUE)
-```
-
-
-
-run from here
-```{r}
-library(tiff)
-
- #godfather_CDF=godfather_akde$CDF
- #godfather_CDF_utm=raster::projectRaster(godfather_CDF,landsat_rgb_cropped,method='bilinear')
- #crs(godfather_CDF_utm,asText=TRUE)
- #CDF_resampled <- terra::resample(godfather_CDF_utm, landsat_rgb_cropped)
-#base_raster=landsat_rgb_cropped
-base_raster=r3
-color_index=sample(1:110,length(akde_list),replace=FALSE)
-j=1
-
-#plotRGB(landsat_rgb_cropped, r = 1, g = 2, b = 3, scale = maxValue(landsat_rgb_cropped))
-
-
-for(i in index_list){
-  tiff("landsat_with_overlay.tiff",
-     width = ncol(base_raster),   # Width of the image in pixels
-     height = nrow(base_raster), # Height of the image in pixels
-     compression = "none") 
-  
-  # plotRGB(base_raster, r = 1, g = 2, b = 3,
-  #         scale = maxValue(landsat_rgb_cropped)
-  #         )
-  plotRGB(base_raster,scale=max(1))
-
-  #raster::plotRGB(landsat_rgb_contrast)
-  #raster::plotRGB(landsat_rgb_cropped, r = 1, g =2 , b = 3, stretch = "lin")
-  #rayshader::plot_map(landsat_rgb_contrast)
-  # grid.newpage()  # Start a new page for plotting
-  # grid.raster(landsat_rgb_contrast, interpolate = FALSE)
-  # Plot the rescaled image
-
-  #make color vecotor and AKDE colors
-  #color_vector=make_color_vector(df)
-
-  #plot CI
-  individual_CI= akde_list_sorted[[i]]$CI
-  individual_CI_utm=sf::st_transform(individual_CI,crs(landsat_rgb_cropped))
-
-  plot(individual_CI_utm,add=TRUE)
-
-
-  #plot CDF
-  #convert AKDE to raster
-  individual_CDF=akde_list_sorted[[i]]$CDF
-  individual_CDF_utm=raster::projectRaster(individual_CDF,landsat_rgb_cropped,method='bilinear')
-  #set to correct CRS
-  #crs(individual_CDF_utm,asText=TRUE)
-  CDF_resampled=individual_CDF_utm
-  #CDF_resampled <- terra::resample(individual_CDF_utm, landsat_rgb_cropped)
-  CDF_resampled$layer[CDF_resampled$layer < .01] <- NA
-  #Convert AKDE raster to a 3D array
-  CDF_array <- as.array(CDF_resampled)
-  color=hcl.pals(type=NULL)[color_index[i]]
-  #raster::plot(1-CDF_resampled$layer, add = TRUE, alpha = .5, col = hcl.colors(20, color),legend=FALSE)
-  hue=head(sequential_hcl(n=20, sequential_hues[test_index[j]]),-3)
-  raster::plot(1-CDF_resampled$layer, add = TRUE, alpha = .5,col=hue,legend=FALSE)
-  j=j+1
-  dev.off()
-  
-  tiff_image <- readTIFF("landsat_with_overlay.TIFF")
-  # Split the array into Red, Green, and Blue channels
-  red_channel <- raster(tiff_image[,,1])
-  green_channel <- raster(tiff_image[,,2])
-  blue_channel <- raster(tiff_image[,,3])
-  
-  print("3")
-  # Stack the RGB layers into a RasterBrick
-  rm(base_raster)  # Remove the variable from the environment
-  gc()             # Force garbage collection to free memory
-  base_raster<- raster::brick(red_channel, green_channel, blue_channel)
-  crs(base_raster) <- crs(landsat_rgb_cropped,asText=TRUE)
-  extent(base_raster)=extent(landsat_rgb_cropped)
-
-
-}
-
-  #dev.off()
-
-  #Load the tiff as a matrix
-  # tiff_image <- readTIFF("landsat_with_overlay.TIFF")
-  # dim(tiff_image)
-  
-
-  # # Split the array into Red, Green, and Blue channels
-  # red_channel <- raster(tiff_image[,,1])
-  # green_channel <- raster(tiff_image[,,2])
-  # blue_channel <- raster(tiff_image[,,3])
-  # 
-  # print("3")
-  # # Stack the RGB layers into a RasterBrick
-  # blended_raster<- raster::brick(red_channel, green_channel, blue_channel)
-  
-  
-  # Convert the matrix to a raster
-  #blended_raster <- as.raster(png_image)
-  dim(base_raster)
-  #blended_raster= terra::rast(blended_raster)
-  
-  # Assign extent to match your original raster (e.g., landsat_rbg)
-  #terra::ext(blended_raster) <- terra::ext(landsat_rbg)
-  extent(base_raster)=extent(landsat_rgb_cropped)
-  
-  # Assign CRS (coordinate reference system) to match the original raster
-  crs(base_raster) <- crs(landsat_rgb_cropped,asText=TRUE)
-  # Rescale each band
-  # base_raster <- stack(
-  #   rescale_to_255(base_raster[[1]]),  # Red
-  #   rescale_to_255(base_raster[[2]]),  # Green
-  #   rescale_to_255(base_raster[[3]])   # Blue
-  # )
-  
-  
-hillshade_rgb_array = array(0,dim=c(nrow(landsat_rgb_cropped),ncol(landsat_rgb_cropped),3))
-
-hillshade_rgb_array[,,1] = tiff_image[,,1] #Red layer
-hillshade_rgb_array[,,2] = tiff_image[,,2] #Blue layer
-hillshade_rgb_array[,,3] = tiff_image[,,3]#Green layer
-
-#hillshade_rgb_array = aperm(hillshade_rgb_array, c(2,1,3))
 ```
 
 
@@ -745,13 +544,28 @@ replayPlot(saved_plot)
 # replayPlot(saved_plot)
 # 
 # dev.off()
+```
 
+```{r}
+tiff_image <- readTIFF("landsat_with_overlay.TIFF")
+  # Split the array into Red, Green, and Blue channels
+  red_channel <- raster(tiff_image[,,1])
+  green_channel <- raster(tiff_image[,,2])
+  blue_channel <- raster(tiff_image[,,3])
+  
+  # Stack the RGB layers into a RasterBrick
+  base_raster<- raster::brick(red_channel, green_channel, blue_channel)
+  crs(base_raster) <- crs(landsat_rgb_cropped,asText=TRUE)
+  extent(base_raster)=extent(landsat_rgb_cropped)
+  
+hillshade_rgb_array = array(0,dim=c(nrow(landsat_rgb_cropped),ncol(landsat_rgb_cropped),3))
+hillshade_rgb_array[,,1] = tiff_image[,,1] #Red layer
+hillshade_rgb_array[,,2] = tiff_image[,,2] #Blue layer
+hillshade_rgb_array[,,3] = tiff_image[,,3]#Green layer
 ```
 
 
-
 ```{r}
-
 make_color_vector_AKDE=function(df, n=10, sequential_hues, index, individuals){
 
   df=df%>%arrange(desc(timestamp))
