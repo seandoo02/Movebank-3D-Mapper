@@ -11,11 +11,13 @@ library(sf)
 library(rstac)
 library(dplyr)
 library(ctmm)
+library(tiff)
 ```
 
 # make_bbox
 ```{r}
 # Creates a bounding box for a movement bank formatted dataframe
+#I plan to change this function so that the AKDEs are not cut off
 make_bbox=function(df){
   bbox=c()
   bbox[[1]]=min(df$location.long, na.rm=TRUE) #west
@@ -73,7 +75,7 @@ merge_tiles=function(df_bbox){
         path = tiles_sf$PATH[[i]]
         row = tiles_sf$ROW[[i]]
         paths_rows = append(paths_rows, list(list(path, row)))
-        return(list(merged_tile, paths_rows))
+        return(list(merged_tile, paths_rows,bounding_box_polygon))
         break
       }
     }
@@ -100,7 +102,7 @@ merge_tiles=function(df_bbox){
       i=i+1
     }
   }
-return(list(merged_tile, paths_rows))
+return(list(merged_tile, paths_rows,bounding_box_polygon))
 }
 ```
 
@@ -350,17 +352,37 @@ akde=function(df_telemetry, individual){
 }
 ```
 
+## make AKDE color vector
+```{r}
+make_color_vector_AKDE=function(df, n=10, sequential_hues, index, individuals){
+
+  df=df%>%arrange(desc(timestamp))
+  
+  number_of_individuals=length(individuals)
+  
+  list_of_colors=c()
+  for(i in 1:length(index)){
+    list_of_colors[[i]]=head(sequential_hcl(n, sequential_hues[index[i]], l=c(30,90), c=90),1)
+  }
+  
+  color_vector=c()
+  for (i in 1:length(df$individual.local.identifier)){
+    individual=df$individual.local.identifier[i]
+    color_vector[i]=list_of_colors[match(individual, individuals)]
+  }
+  
+  return(color_vector)
+  
+}
+```
+
 # load data
 ```{r}
-df=read.csv("movebank_data/Movement patterns of seed dispersing spotted nutcrackers (Nucifraga caryocatactes).csv")
+#df=read.csv("movebank_data/Movement patterns of seed dispersing spotted nutcrackers (Nucifraga caryocatactes).csv")
 
 #df=read.csv('movebank_data/3D flights of European free-tailed bats.csv')
 
-#df=read.csv('movebank_data/Barn Owl Breeding Napa Valley California.csv')
-
-
-#df=read.csv('movebank_data/Mountain caribou in British Columbia-gps.csv')
-
+df=read.csv('movebank_data/Barn Owl Breeding Napa Valley California.csv')
 
 #df=read.csv('movebank_data/GPS tracking of bobcats and coyotes in northern Washington.csv')
 ```
@@ -375,6 +397,7 @@ df_bbox=make_bbox(df)
 temp=merge_tiles(df_bbox)
 merged_tile=temp[[1]]
 paths_rows=temp[[2]]
+bounding_box_polygon=temp[[3]]
 
 #plot the tiles
 plot(merged_tile)
@@ -464,8 +487,8 @@ plotRGB(landsat_rgb_cropped, r = 1, g = 2, b = 3, scale = maxValue(landsat_rgb_c
 ```{r}
 inividuals=unique(df$individual.local.identifier)[1:5]
 #inividuals=unique(df$individual.local.identifier)
-#This takes so long
 
+#This takes so long
 df_telemetry=ctmm::as.telemetry(df)
 akde_list=c()
 i=1
@@ -474,9 +497,9 @@ for(n in inividuals){
   akde_list[[i]]=akde(df_telemetry,n)
   i=i+1
 }
-```
 
-```{r}
+
+#calcuate the area of the largest CI of each individual
 area_list=c()
 i=1
 for(individual in akde_list){
@@ -485,6 +508,7 @@ for(individual in akde_list){
   i=i+1
 }
 
+# sort the CIs by area so they are plotted nicely
 akde_list_sorted=c()
 for(i in 1:length(area_list)){
   index_of_max=which.max(area_list)
@@ -495,20 +519,21 @@ for(i in 1:length(area_list)){
 
 ```
 
+# colors for AKDE
 ```{r}
+# create colors for plotting CDF
 index_list=c(1:length(inividuals))
 sequential_hues=c("Blues 2", "Blues 3", "Purples 2", "Purples 3", "Reds 2", "Reds 3", "Greens 2", "Greens 3")
-test_index=color_index=sample(1:length(sequential_hues),length(index_list),replace=FALSE)
-```
+color_index=sample(1:length(sequential_hues),length(index_list),replace=FALSE)
+#test_index=color_index=sample(1:length(sequential_hues),length(index_list),replace=FALSE)
 
-```{r}
 for(i in index_list){
-  hue=head(sequential_hcl(n=10, sequential_hues[test_index[i]]),-3)
+  hue=head(sequential_hcl(n=10, sequential_hues[color_index[i]]),-3)
   raster::plot(1-akde_list[[i]]$CDF$layer, alpha=.5, col = hue ,legend=FALSE)
 }
 ```
 
-
+## plotting AKDE over landsat RGB raster
 ```{r}
 plotRGB(landsat_rgb_cropped,r=1,g=2,b=3,scale=maxValue(landsat_rgb_cropped))
 
@@ -526,7 +551,7 @@ for(i in 1:length(akde_list_sorted)){
   individual_CDF_utm$layer[individual_CDF_utm$layer < .01] <- NA
   CDF_array <- as.array(individual_CDF_utm)
   color=hcl.pals(type=NULL)[color_index[i]]
-  hue=head(sequential_hcl(n=20, sequential_hues[test_index[j]]),-3)
+  hue=head(sequential_hcl(n=20, sequential_hues[color_index[j]]),-3)
   raster::plot(1-individual_CDF_utm$layer, add = TRUE, alpha = .5,col=hue,legend=FALSE)
   j=j+1
 }
@@ -534,16 +559,17 @@ for(i in 1:length(akde_list_sorted)){
 saved_plot=recordPlot()
 dev.off()
 
+#replayPlot(saved_plot)
+
+# This is not working. When I make the tiff the CDF and CI plots get moved around. The weird thing is when I dont save it as a tiff the plot looks fine.
+tiff("landsat_with_overlay.tiff",
+   width = ncol(landsat_rgb_cropped),   # Width of the image in pixels
+   height = nrow(landsat_rgb_cropped), # Height of the image in pixels
+   compression = "none")
+
 replayPlot(saved_plot)
 
-# tiff("landsat_with_overlay.tiff",
-#    width = ncol(base_raster),   # Width of the image in pixels
-#    height = nrow(base_raster), # Height of the image in pixels
-#    compression = "none")
-# 
-# replayPlot(saved_plot)
-# 
-# dev.off()
+
 ```
 
 ```{r}
@@ -564,43 +590,16 @@ hillshade_rgb_array[,,2] = tiff_image[,,2] #Blue layer
 hillshade_rgb_array[,,3] = tiff_image[,,3]#Green layer
 ```
 
-
-```{r}
-make_color_vector_AKDE=function(df, n=10, sequential_hues, index, individuals){
-
-  df=df%>%arrange(desc(timestamp))
-  
-  number_of_individuals=length(individuals)
-  
-  list_of_colors=c()
-  for(i in 1:length(index)){
-    list_of_colors[[i]]=head(sequential_hcl(n, sequential_hues[index[i]], l=c(30,90), c=90),1)
-  }
-  
-  color_vector=c()
-  for (i in 1:length(df$individual.local.identifier)){
-    individual=df$individual.local.identifier[i]
-    color_vector[i]=list_of_colors[match(individual, individuals)]
-  }
-  
-  return(color_vector)
-  
-}
-```
-
-
-
 ```{r}
 df_individual=df[df$individual.local.identifier==inividuals[index_list],]
 
 df_individual=df_individual[complete.cases(df_individual$location.lat, df_individual$location.long),]
 
-color_vector=make_color_vector_AKDE(df_individual, n=10, sequential_hues = sequential_hues, index=test_index, inividuals )
+color_vector=make_color_vector_AKDE(df_individual, n=10, sequential_hues = sequential_hues, index=color_index, inividuals )
 ```
 
 ```{r}
 utm_locations=convert_location_data_to_utm(df_individual, elevation_cropped)
-#utm_locations=convert_location_data_to_utm(df, elevation_cropped)
 utm_lats=utm_locations[[1]]
 utm_longs=utm_locations[[2]]
 
@@ -615,13 +614,13 @@ rayshader::plot_3d(hillshade_rgb_array, elevation_matrix, windowsize = c(900,900
         zoom=.5, phi=40,theta=0,fov=70, background = "#F2E1D0", shadowcolor = "#523E2B")
 
 
-# render_points(extent=attr(elevation_cropped,"extent"),
-#            lat=unlist(utm_lats), long=unlist(utm_longs),
-#            heightmap = rayshader::raster_to_matrix(elevation_cropped),
-#            #altitude = df_individual$height.above.ellipsoid,
-#            size=8,
-#            zscale=30,
-#            color=color_vector)
+render_points(extent=attr(elevation_cropped,"extent"),
+           lat=unlist(utm_lats), long=unlist(utm_longs),
+           heightmap = rayshader::raster_to_matrix(elevation_cropped),
+           #altitude = df_individual$height.above.ellipsoid,
+           size=8,
+           zscale=30,
+           color=color_vector)
 
 # render_path(extent=attr(elevation_cropped,"extent"),
 #            lat=unlist(utm_lats), long=unlist(utm_longs),
