@@ -380,11 +380,10 @@ make_color_vector_AKDE=function(df, n=10, sequential_hues, index, individuals){
 ```{r}
 #df=read.csv("movebank_data/Movement patterns of seed dispersing spotted nutcrackers (Nucifraga caryocatactes).csv")
 
-#df=read.csv('movebank_data/3D flights of European free-tailed bats.csv')
 
-df=read.csv('movebank_data/Barn Owl Breeding Napa Valley California.csv')
+#df=read.csv('movebank_data/Barn Owl Breeding Napa Valley California.csv')
 
-#df=read.csv('movebank_data/GPS tracking of bobcats and coyotes in northern Washington.csv')
+df=read.csv('movebank_data/Hornbill telemetry in northeast India.csv')
 ```
 
 
@@ -455,11 +454,7 @@ if(length(landsat_tiles)>1){
 raster::plotRGB(merged_rgb)
 ```
 
-```{r}
-length(landsat_tiles)
-length(paths_rows)
-length(min_cloud_indices)
-```
+
 
 
 
@@ -492,8 +487,12 @@ plotRGB(landsat_rgb_cropped, r = 1, g = 2, b = 3, scale = maxValue(landsat_rgb_c
 
 
 ```{r}
-inividuals=unique(df$individual.local.identifier)[1:5]
-#inividuals=unique(df$individual.local.identifier)
+if(length(unique(df$individual.local.identifier))>8){
+  inividuals=unique(df$individual.local.identifier)[1:8]
+}else{
+  inividuals=unique(df$individual.local.identifier)
+}
+
 
 #This takes so long
 df_telemetry=ctmm::as.telemetry(df)
@@ -543,9 +542,12 @@ for(i in index_list){
 ## plotting AKDE over landsat RGB raster
 ```{r}
 plotRGB(landsat_rgb_cropped,r=1,g=2,b=3,scale=maxValue(landsat_rgb_cropped))
-
+test_col_list=c()
 j=1
+i=3
 for(i in 1:length(akde_list_sorted)){
+
+
   individual_CI= akde_list_sorted[[i]]$CI
   individual_CI_utm=sf::st_transform(individual_CI,crs(landsat_rgb_cropped))
   plot(individual_CI_utm, add=TRUE)
@@ -559,6 +561,7 @@ for(i in 1:length(akde_list_sorted)){
   CDF_array <- as.array(individual_CDF_utm)
   color=hcl.pals(type=NULL)[color_index[i]]
   hue=head(sequential_hcl(n=20, sequential_hues[color_index[j]]),-3)
+  test_col_list=append(test_col_list, hue[[1]])
   raster::plot(1-individual_CDF_utm$layer, add = TRUE, alpha = .5,col=hue,legend=FALSE)
   j=j+1
 }
@@ -578,6 +581,22 @@ replayPlot(saved_plot)
 
 
 ```
+```{r}
+color_index
+```
+```{r}
+sequ
+```
+
+
+```{r}
+for(i in 1:length(test_col_list)){
+  plot.new()
+  # Draw a rectangle from the bottom left (0,0) to the top right (1,1)
+  rect(0, 0, 1, 1, col = test_col_list[[i]], border = NA)
+}
+```
+
 
 ```{r}
 tiff_image <- readTIFF("landsat_with_overlay.TIFF")
@@ -598,7 +617,8 @@ hillshade_rgb_array[,,3] = tiff_image[,,3]#Green layer
 ```
 
 ```{r}
-df_individual=df[df$individual.local.identifier==inividuals[index_list],]
+#df_individual=df[df$individual.local.identifier==inividuals[index_list],]
+df_individual=df[df$individual.local.identifier==inividuals[index_list[[4]]],]
 
 df_individual=df_individual[complete.cases(df_individual$location.lat, df_individual$location.long),]
 
@@ -619,7 +639,7 @@ rayshader::plot_3d(hillshade_rgb_array, elevation_matrix, windowsize = c(900,900
 render_points(extent=attr(elevation_cropped,"extent"),
            lat=unlist(utm_lats), long=unlist(utm_longs),
            heightmap = rayshader::raster_to_matrix(elevation_cropped),
-           #altitude = df_individual$height.above.ellipsoid,
+           altitude = df_individual$height.above.ellipsoid,
            size=8,
            zscale=30,
            color=color_vector)
