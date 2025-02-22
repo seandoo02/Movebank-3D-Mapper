@@ -613,6 +613,7 @@ utm_longs=utm_locations[[2]]
 
 #plot 3D map
 ```{r}
+#I need to fix how I make the hillshade_rgb_array
 rayshader::plot_3d(hillshade_rgb_array, elevation_matrix, windowsize = c(900,900), zscale = 30, shadowdepth = -50,
         zoom=.5, phi=40,theta=0,fov=70, background = "#F2E1D0", shadowcolor = "#523E2B")
 render_points(extent=attr(elevation_cropped,"extent"),
