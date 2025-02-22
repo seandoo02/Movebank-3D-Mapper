@@ -417,7 +417,7 @@ time_interval=make_time_interval(df)
 landsat_obj=get_landsat(df_bbox, time_interval)
 
 #This nested for loop will find the lansat rasters that have the min cloud cover over the study area
-min_cloud_of_intrest=list()
+min_cloud_indices=list()
 for(i in 1:length(paths_rows)){
   path=paths_rows[[i]][[1]]
   row=paths_rows[[i]][[2]]
@@ -428,7 +428,7 @@ for(i in 1:length(paths_rows)){
     }
   }
   min_cloud_index=find_min_cloud(landsat_obj,indexes_of_intrest)
-  min_cloud_indices=append(min_cloud_of_intrest,min_cloud_index)
+  min_cloud_indices=append(min_cloud_indices,min_cloud_index)
 }
 
 
@@ -454,6 +454,13 @@ if(length(landsat_tiles)>1){
 #plot the raster
 raster::plotRGB(merged_rgb)
 ```
+
+```{r}
+length(landsat_tiles)
+length(paths_rows)
+length(min_cloud_indices)
+```
+
 
 
 ```{r}
@@ -561,7 +568,7 @@ dev.off()
 
 #replayPlot(saved_plot)
 
-# This is not working. When I make the tiff the CDF and CI plots get moved around. The weird thing is when I dont save it as a tiff the plot looks fine.
+#This is not working. When I make the tiff the CDF and CI plots get moved around. The weird thing is when I dont save it as a tiff the plot looks fine.
 tiff("landsat_with_overlay.tiff",
    width = ncol(landsat_rgb_cropped),   # Width of the image in pixels
    height = nrow(landsat_rgb_cropped), # Height of the image in pixels
@@ -596,24 +603,18 @@ df_individual=df[df$individual.local.identifier==inividuals[index_list],]
 df_individual=df_individual[complete.cases(df_individual$location.lat, df_individual$location.long),]
 
 color_vector=make_color_vector_AKDE(df_individual, n=10, sequential_hues = sequential_hues, index=color_index, inividuals )
-```
 
-```{r}
+
 utm_locations=convert_location_data_to_utm(df_individual, elevation_cropped)
 utm_lats=utm_locations[[1]]
 utm_longs=utm_locations[[2]]
 
 ```
 
+#plot 3D map
 ```{r}
-a <- 1:10
-
-# rayshader::plot_3d(landsat_rgb_contrast, elevation_matrix, windowsize = c(900,900), zscale = 30, shadowdepth = -50,
-#         zoom=.5, phi=40,theta=0,fov=70, background = "#F2E1D0", shadowcolor = "#523E2B")
 rayshader::plot_3d(hillshade_rgb_array, elevation_matrix, windowsize = c(900,900), zscale = 30, shadowdepth = -50,
         zoom=.5, phi=40,theta=0,fov=70, background = "#F2E1D0", shadowcolor = "#523E2B")
-
-
 render_points(extent=attr(elevation_cropped,"extent"),
            lat=unlist(utm_lats), long=unlist(utm_longs),
            heightmap = rayshader::raster_to_matrix(elevation_cropped),
