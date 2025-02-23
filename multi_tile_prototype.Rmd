@@ -354,16 +354,17 @@ akde=function(df_telemetry, individual){
 
 ## make AKDE color vector
 ```{r}
-make_color_vector_AKDE=function(df, n=10, sequential_hues, index, individuals){
+make_color_vector_AKDE=function(df, n=10, sequential_hues, color_index, individuals){
 
-  df=df%>%arrange(desc(timestamp))
+  #df=df%>%arrange(desc(timestamp))
   
-  number_of_individuals=length(individuals)
+  #number_of_individuals=length(individuals)
   
   list_of_colors=c()
-  for(i in 1:length(index)){
-    list_of_colors[[i]]=head(sequential_hcl(n, sequential_hues[index[i]], l=c(30,90), c=90),1)
+  for(i in 1:length(color_index)){
+    list_of_colors[[i]]=head(sequential_hcl(n, sequential_hues[color_index[i]], l=c(30,90), c=90),1)
   }
+
   
   color_vector=c()
   for (i in 1:length(df$individual.local.identifier)){
@@ -378,12 +379,12 @@ make_color_vector_AKDE=function(df, n=10, sequential_hues, index, individuals){
 
 # load data
 ```{r}
-#df=read.csv("movebank_data/Movement patterns of seed dispersing spotted nutcrackers (Nucifraga caryocatactes).csv")
+df=read.csv("movebank_data/Movement patterns of seed dispersing spotted nutcrackers (Nucifraga caryocatactes).csv")
 
 
 #df=read.csv('movebank_data/Barn Owl Breeding Napa Valley California.csv')
 
-df=read.csv('movebank_data/Hornbill telemetry in northeast India.csv')
+#df=read.csv('movebank_data/Hornbill telemetry in northeast India.csv')
 ```
 
 
@@ -487,11 +488,12 @@ plotRGB(landsat_rgb_cropped, r = 1, g = 2, b = 3, scale = maxValue(landsat_rgb_c
 
 
 ```{r}
-if(length(unique(df$individual.local.identifier))>8){
-  inividuals=unique(df$individual.local.identifier)[1:8]
-}else{
-  inividuals=unique(df$individual.local.identifier)
-}
+inividuals=unique(df$individual.local.identifier)[1:4]
+# if(length(unique(df$individual.local.identifier))>8){
+#   inividuals=unique(df$individual.local.identifier)[1:8]
+# }else{
+#   inividuals=unique(df$individual.local.identifier)
+# }
 
 
 #This takes so long
@@ -505,23 +507,32 @@ for(n in inividuals){
 }
 
 
+
+
+```
+
+
+
+```{r}
 #calcuate the area of the largest CI of each individual
 area_list=c()
 i=1
 for(individual in akde_list){
-  area_list[[i]]=sf::st_area(individual$CI[[3]])
+  area_list$area[[i]]=sf::st_area(individual$CI[[3]])
+  area_list$individual[[i]]=inividuals[[i]]
   plot(individual$CI)
   i=i+1
 }
 
 # sort the CIs by area so they are plotted nicely
 akde_list_sorted=c()
-for(i in 1:length(area_list)){
-  index_of_max=which.max(area_list)
+individuals_sorted=c()
+for(i in 1:length(area_list$area)){
+  index_of_max=which.max(area_list$area)
   akde_list_sorted[[i]]=akde_list[[index_of_max]]
-  area_list[[index_of_max]]=0
+  individuals_sorted[[i]]=area_list$individual[[index_of_max]]
+  area_list$area[[index_of_max]]=0
 }
-
 
 ```
 
@@ -540,13 +551,14 @@ for(i in index_list){
 ```
 
 ## plotting AKDE over landsat RGB raster
+
 ```{r}
 plotRGB(landsat_rgb_cropped,r=1,g=2,b=3,scale=maxValue(landsat_rgb_cropped))
 test_col_list=c()
 j=1
-i=3
+i=1
 for(i in 1:length(akde_list_sorted)){
-
+#for(i in 1:2){
 
   individual_CI= akde_list_sorted[[i]]$CI
   individual_CI_utm=sf::st_transform(individual_CI,crs(landsat_rgb_cropped))
@@ -555,6 +567,7 @@ for(i in 1:length(akde_list_sorted)){
   #convert AKDE to raster
   individual_CDF=akde_list_sorted[[i]]$CDF
   individual_CDF_utm=raster::projectRaster(individual_CDF,landsat_rgb_cropped,method='bilinear')
+
   #set to correct CRS
 
   individual_CDF_utm$layer[individual_CDF_utm$layer < .01] <- NA
@@ -562,7 +575,7 @@ for(i in 1:length(akde_list_sorted)){
   color=hcl.pals(type=NULL)[color_index[i]]
   hue=head(sequential_hcl(n=20, sequential_hues[color_index[j]]),-3)
   test_col_list=append(test_col_list, hue[[1]])
-  raster::plot(1-individual_CDF_utm$layer, add = TRUE, alpha = .5,col=hue,legend=FALSE)
+  raster::plot(1-individual_CDF_utm$layer, add = TRUE, alpha = .4,col=hue,legend=FALSE, useRaster=TRUE)
   j=j+1
 }
 
@@ -581,21 +594,98 @@ replayPlot(saved_plot)
 
 
 ```
+###  I am trying to debug what is causing the AKDEs to plot strangely(moved, cropped ,and warped) when they are layered
 ```{r}
-color_index
-```
-```{r}
-sequ
+j=1
+i=1
+#for(i in 1:length(akde_list_sorted)){
+#for(i in 1:2){
+  plotRGB(landsat_rgb_cropped,r=1,g=2,b=3,scale=maxValue(landsat_rgb_cropped))
+
+  individual_CI= akde_list_sorted[[i]]$CI
+  individual_CI_utm=sf::st_transform(individual_CI,crs(landsat_rgb_cropped))
+  plot(individual_CI_utm, add=TRUE)
+
+  #convert AKDE to raster
+  individual_CDF=akde_list_sorted[[i]]$CDF
+  individual_CDF_utm=raster::projectRaster(individual_CDF,landsat_rgb_cropped,method='bilinear')
+
+  #set to correct CRS
+
+  individual_CDF_utm$layer[individual_CDF_utm$layer < .01] <- NA
+  CDF_array <- as.array(individual_CDF_utm)
+  color=hcl.pals(type=NULL)[color_index[i]]
+  hue=head(sequential_hcl(n=20, sequential_hues[color_index[j]]),-3)
+  test_col_list=append(test_col_list, hue[[1]])
+  raster::plot(1-individual_CDF_utm$layer, add = TRUE, alpha = .4,col=hue,legend=FALSE, useRaster=TRUE)
+  j=j+2
+  i=i+2
+  #-----------------
+  #plotRGB(landsat_rgb_cropped,r=1,g=2,b=3,scale=maxValue(landsat_rgb_cropped))
+
+  individual_CI= akde_list_sorted[[i]]$CI
+  individual_CI_utm=sf::st_transform(individual_CI,crs(landsat_rgb_cropped))
+  plot(individual_CI_utm,  add = TRUE)
+
+  #convert AKDE to raster
+  individual_CDF=akde_list_sorted[[i]]$CDF
+  individual_CDF_utm=raster::projectRaster(individual_CDF,landsat_rgb_cropped,method='bilinear')
+
+  #set to correct CRS
+
+  individual_CDF_utm$layer[individual_CDF_utm$layer < .01] <- NA
+  CDF_array <- as.array(individual_CDF_utm)
+  color=hcl.pals(type=NULL)[color_index[i]]
+  hue=head(sequential_hcl(n=20, sequential_hues[color_index[j]]),-3)
+  test_col_list=append(test_col_list, hue[[1]])
+  raster::plot(1-individual_CDF_utm$layer, add = TRUE, alpha = .4,col=hue,legend=FALSE, useRaster=TRUE)
+  j=j+1
+  i=i+1
+  
+  #-----------------
+  plotRGB(landsat_rgb_cropped,r=1,g=2,b=3,scale=maxValue(landsat_rgb_cropped))
+
+  individual_CI= akde_list_sorted[[i]]$CI
+  individual_CI_utm=sf::st_transform(individual_CI,crs(landsat_rgb_cropped))
+  plot(individual_CI_utm,  add = TRUE)
+
+  #convert AKDE to raster
+  individual_CDF=akde_list_sorted[[i]]$CDF
+  individual_CDF_utm=raster::projectRaster(individual_CDF,landsat_rgb_cropped,method='bilinear')
+
+  #set to correct CRS
+
+  individual_CDF_utm$layer[individual_CDF_utm$layer < .01] <- NA
+  CDF_array <- as.array(individual_CDF_utm)
+  color=hcl.pals(type=NULL)[color_index[i]]
+  hue=head(sequential_hcl(n=20, sequential_hues[color_index[j]]),-3)
+  test_col_list=append(test_col_list, hue[[1]])
+  raster::plot(1-individual_CDF_utm$layer, add = TRUE, alpha = .4,col=hue,legend=FALSE, useRaster=TRUE)
+  j=j+1
+  i=i+1
+#}
+
 ```
 
 
+
+### The crs and extents are the same for all of the AKDEs
 ```{r}
-for(i in 1:length(test_col_list)){
-  plot.new()
-  # Draw a rectangle from the bottom left (0,0) to the top right (1,1)
-  rect(0, 0, 1, 1, col = test_col_list[[i]], border = NA)
+print(extent(landsat_rgb_cropped))
+print(crs(landsat_rgb_cropped, asText=TRUE))
+
+individual_CDF_utm_1=raster::projectRaster(akde_list_sorted[[4]]$CDF,landsat_rgb_cropped,method='bilinear')
+#print(extent(individual_CDF_utm_1))
+
+individual_CDF_utm_4=raster::projectRaster(akde_list_sorted[[1]]$CDF,landsat_rgb_cropped,method='bilinear')
+#print(extent(individual_CDF_utm_4))
+if(extent(individual_CDF_utm_4)==extent(individual_CDF_utm_1)& 
+   crs(individual_CDF_utm_1,asText=TRUE)==crs(individual_CDF_utm_4,asText=TRUE)){
+  print("They are the same")
 }
 ```
+
+
 
 
 ```{r}
@@ -616,13 +706,14 @@ hillshade_rgb_array[,,2] = tiff_image[,,2] #Blue layer
 hillshade_rgb_array[,,3] = tiff_image[,,3]#Green layer
 ```
 
+
 ```{r}
-#df_individual=df[df$individual.local.identifier==inividuals[index_list],]
-df_individual=df[df$individual.local.identifier==inividuals[index_list[[4]]],]
+df_individual=df[df$individual.local.identifier==inividuals[index_list],]
+#df_individual=df[df$individual.local.identifier==individuals_sorted[index_list[[1]]],]
 
 df_individual=df_individual[complete.cases(df_individual$location.lat, df_individual$location.long),]
 
-color_vector=make_color_vector_AKDE(df_individual, n=10, sequential_hues = sequential_hues, index=color_index, inividuals )
+color_vector=make_color_vector_AKDE(df_individual, n=10, sequential_hues = sequential_hues, color_index, individuals_sorted )
 
 
 utm_locations=convert_location_data_to_utm(df_individual, elevation_cropped)
