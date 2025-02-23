@@ -303,10 +303,10 @@ convert_location_data_to_utm=function(df, elevation_cropped){
   utm_longs=c()
   
   for(i in 1:length(coords_utm)){
-    utm_lats[[i]]=coordinates(coords_utm[i])[2]
-    utm_longs[[i]]=coordinates(coords_utm[i])[1]
+    utm_y[[i]]=coordinates(coords_utm[i])[2]
+    utm_x[[i]]=coordinates(coords_utm[i])[1]
   }
-  return(list(utm_lats, utm_longs))
+  return(list(utm_y, utm_x))
 }
 ```
 
@@ -717,8 +717,8 @@ color_vector=make_color_vector_AKDE(df_individual, n=10, sequential_hues = seque
 
 
 utm_locations=convert_location_data_to_utm(df_individual, elevation_cropped)
-utm_lats=utm_locations[[1]]
-utm_longs=utm_locations[[2]]
+utm_y=utm_locations[[1]]
+utm_x=utm_locations[[2]]
 
 ```
 
