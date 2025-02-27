@@ -513,17 +513,34 @@ plotRGB(landsat_rgb_cropped, r = 1, g = 2, b = 3, scale = maxValue(landsat_rgb_c
 df=read.csv('movebank_data/Hornbill telemetry in northeast India.csv')
 ```
 
+```{r}
+library(lubridate)
+?time_length
+?ymd_hms
+q <- time_length(interval(ymd_hms("-01-01 00:00:00"), ymd_hms(df$timestamp[1])), "second")
+df$timestamp[1]
+arrange(df, timestamp)
+```
+
 
 ```{r}
+library(dplyr)
+df=arrange(df, timestamp)
 unique(df$individual.local.identifier)
 DATA=df[df$individual.local.identifier=="3_mogambo",]
+#DATA=df[df$individual.local.identifier=="4_godfather",]
 
-ggplot(data = DATA, aes(x = location.long, y = location.lat)) +  
-  geom_point(color = "blue") +  
+DATA$seconds_since_start=time_length(interval(ymd_hms(df$timestamp[1]), ymd_hms(DATA$timestamp)), "second")
+DATA=DATA%>%filter(!is.na(seconds_since_start))
+
+ggplot(data = DATA, aes(x = location.long, y = location.lat, color=seconds_since_start)) +
+  geom_point() +  
   labs(title = "Movement of 1_bill",
        x = "Longitude",
        y = "Latitude") +
-  theme_minimal()
+  theme_minimal()+
+  scale_color_gradient(low = "blue3", high = "deeppink1") 
+
 ```
 
 ```{r}
@@ -645,7 +662,7 @@ render_path(extent=attr(elevation_cropped,"extent"),
            #resample_evenly = TRUE,
            #resample_n = 1000,
            reorder=TRUE,
-           zscale=30,
+           zscale=28,
            color="red",
            antialias=TRUE)
 #render_compass()
@@ -660,30 +677,31 @@ length(SIM$t)
 
 # make animation
 ```{r}
-# # points=seq(1,length(SIM))
-# # points[1]
-# for(i in 1:(length(SIM$t))) {
-#   render_points(extent=attr(elevation_cropped,"extent"),
-#               heightmap = rayshader::raster_to_matrix(elevation_cropped),
-#               lat=unlist(sim_utm_y[i]), long=unlist(sim_utm_x[i]),
-#               #altitude = df$height.above.ellipsoid,
-#               zscale = 30,
-#               color="blue",
-#               size=10,
-#               clear_previous = TRUE)
-# 
-#   render_snapshot(filename = sprintf("animation/CTMM_sim_path%i.png", i),
-#                   title_text = "SIM path example",
-#                   title_bar_color = "#1f5214", title_color = "white", title_bar_alpha = 1)
-# }
+# points=seq(1,length(SIM))
+# points[1]
+for(i in 1:(length(SIM$t)/10)) {
+  i=i*10
+  render_points(extent=attr(elevation_cropped,"extent"),
+              heightmap = rayshader::raster_to_matrix(elevation_cropped),
+              lat=unlist(sim_utm_y[i]), long=unlist(sim_utm_x[i]),
+              #altitude = df$height.above.ellipsoid,
+              zscale = 30,
+              color="blue",
+              size=10,
+              clear_previous = TRUE)
+
+  render_snapshot(filename = sprintf("animation/CTMM_sim_path%i.png", i),
+                  title_text = "SIM path example",
+                  title_bar_color = "#1f5214", title_color = "white", title_bar_alpha = 1)
+}
 
 ```
 
 
 
 ```{r}
-# av::av_encode_video(sprintf("animation/CTMM_sim_path%d.png",seq(1,length(SIM$t),by=1)), framerate = 30, output = "SIM_path_example.mp4")
-
+av::av_encode_video(sprintf("animation/CTMM_sim_path%d.png",seq(10,length(SIM$t),by=10)), framerate = 15, output = "SIM_path_example.mp4")
+#unlink("animation", recursive=TRUE)
 ```
 
 
