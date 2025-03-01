@@ -1,0 +1,384 @@
+
+```{r}
+library(rayshader)
+library(sp)
+library(raster)
+library(scales)
+library(sf)
+library(rstac)
+library(dplyr)
+library(ctmm)
+```
+
+
+
+```{r}
+#########################
+#Define functions needed
+########################
+# Creates a bounding box for a movement bank formatted dataframe
+#I plan to change this function so that the AKDEs are not cut off
+make_bbox=function(df){
+  if (class(df)=="list" | class(df)=="telemetry"){
+    extent_ctmm=ctmm::extent(df)
+    bbox=c()
+  bbox[[1]]=extent_ctmm[1,1]#west
+  bbox[[2]]= extent_ctmm[1,2]#south
+  bbox[[3]]= extent_ctmm[2,1]#east
+  bbox[[4]]= extent_ctmm[2,2]#north
+  return(bbox)
+  }
+  bbox=c()
+  bbox[[1]]=min(df$location.long, na.rm=TRUE) #west
+  bbox[[2]]= min(df$location.lat, na.rm=TRUE)#south
+  bbox[[3]]= max(df$location.long, na.rm=TRUE)#east
+  bbox[[4]]= max(df$location.lat, na.rm=TRUE)#north
+  return(bbox)
+}
+
+#takes bounding box and selects landsat tiles that will cover the area
+#touch at you own peril
+merge_tiles=function(df_bbox){
+  # Step 1: Define bounding box coordinates
+  xmin = df_bbox[[1]]
+  xmax = df_bbox[[3]]
+  ymin = df_bbox[[2]]
+  ymax = df_bbox[[4]]
+  
+  # Step 2: Create a matrix with the 4 corners, closing the loop
+  bounding_box_coords <- matrix(c(xmin, ymin,  # bottom-left
+                                  xmax, ymin,  # bottom-right
+                                  xmax, ymax,  # top-right
+                                  xmin, ymax,  # top-left
+                                  xmin, ymin), # closing the loop back to bottom-left
+                                ncol = 2, byrow = TRUE)
+  
+  # Step 3: Create a polygon geometry using the coordinates
+  bounding_box_polygon <- st_polygon(list(bounding_box_coords))
+  
+  # Step 4: Read shapefile and convert to sf object
+  #tiles = sf::read_sf("WRS2_descending_0/WRS2_descending.shp")
+  tiles = sf::read_sf("WRS2_descending.shp")
+  
+  # Assuming that the shapefile already has geometry columns, no need for coords parameter
+  tiles_sf = st_as_sf(tiles, crs = st_crs(map))
+  
+  # Step 5: Loop over geometries and check if they cover the bounding box polygon
+  tiles_sf$cover_area=0
+  paths_rows = list()
+  
+  for (i in 1:length(tiles_sf$geometry)) {
+    
+    temp_intersection=st_intersection(bounding_box_polygon, tiles_sf$geometry[[i]])
+    if(length(temp_intersection)==1){
+      #print("the tile is on the bbox")
+      cover_area=st_area(temp_intersection)
+      tiles_sf$cover_area[[i]]=cover_area
+      
+      if(cover_area==st_area(bounding_box_polygon)){
+        print("the tile completly covers the bbox")
+        
+        # Append a list containing path and row to the paths_rows list
+        merged_tile=tiles_sf$geometry[[i]]
+        path = tiles_sf$PATH[[i]]
+        row = tiles_sf$ROW[[i]]
+        paths_rows = append(paths_rows, list(list(path, row)))
+        return(list(merged_tile, paths_rows,bounding_box_polygon))
+        break
+      }
+    }
+  }
+  
+  if(length(paths_rows)>0){
+    print("done")
+  } else{
+    #print("not done")
+    tiles_sf=tiles_sf[order(tiles_sf$cover_area, decreasing = TRUE),]
+    i=2
+    merged_tile=tiles_sf$geometry[[1]]
+    path = tiles_sf$PATH[[1]]
+    row = tiles_sf$ROW[[1]]
+    paths_rows = append(paths_rows, list(list(path, row)))
+    while(cover_area!=st_area(bounding_box_polygon)){
+      path = tiles_sf$PATH[[i]]
+      row = tiles_sf$ROW[[i]]
+      paths_rows = append(paths_rows, list(list(path, row)))
+      merged_tile=st_union(merged_tile, tiles_sf$geometry[[i]])
+      merged_intersection=st_intersection(bounding_box_polygon, merged_tile)
+      cover_area=st_area(merged_intersection)
+      #print(paste0(i," tiles added"))
+      i=i+1
+    }
+  }
+  return(list(merged_tile, paths_rows,bounding_box_polygon))
+}
+
+
+## use the stac api to get the get data from Landsat collection 2 level 2  stored on the Microsoft planetary computer
+get_landsat=function(df_bbox, time_interval){
+  s_obj <- rstac::stac("https://planetarycomputer.microsoft.com/api/stac/v1/")
+  landsat_obj <- s_obj %>%
+    stac_search(collections = "landsat-c2-l2",
+                bbox = df_bbox,
+                datetime = time_interval
+    ) %>%
+    get_request() %>%
+    items_sign(sign_fn = sign_planetary_computer())
+  return(landsat_obj)
+}
+
+
+#makes a time inverval that the movement data was colected over
+make_time_interval=function(df){
+  if (class(df)=="list" | class(df)=="telemetry"){
+    # df_temp=data.frame()
+    # for(ind in df){
+    #   temp=data.frame(ind)
+    #   if(length(df_temp)==0){
+    #     df_temp=temp
+    #   }
+    #   else{
+    #     df_temp=rbind.data.frame(df_temp, temp)
+    #   }
+    # }
+    # df=df_temp
+    return("2017-08-15T10:15:10Z/2022-10-05T10:03:47Z")
+  }
+  min_time=min(df$timestamp)
+  substr(min_time,11,11)="T"
+  substr(min_time,20,20)="Z"
+  min_time=substr(min_time,1,20)
+  
+  max_time=max(df$timestamp)
+  substr(max_time,11,11)="T"
+  substr(max_time,20,20)="Z"
+  max_time=substr(max_time,1,20)
+  
+  time_interval=paste(min_time, max_time, sep="/")
+  return(time_interval)
+}
+
+# finds the index of the landsat object that has the least cloud coverage with in the time interval
+find_min_cloud=function(landsat_obj,indexes_of_intrest){
+  min_cloud_cover=100
+  min_cloud_index=0
+  for (i in indexes_of_intrest){
+    #print(paste0(i, " In min cloud function and checking this index"))
+    if (landsat_obj$features[[i]]$properties$`eo:cloud_cover`<=min_cloud_cover 
+        & landsat_obj$features[[i]]$properties$`eo:cloud_cover`>0
+    ){
+      min_cloud_cover=landsat_obj$features[[i]]$properties$`eo:cloud_cover`
+      min_cloud_index=i
+    }
+  }
+  return(min_cloud_index)
+  # print(min_cloud_index)
+  # print(min_cloud_cover)
+}
+
+#take the min cloud index and the landsate_obj and then loads in the rasters and creates an rgb raster that is color corrected by taking the sqrt 
+make_landsat_rgb=function(landsat_obj, min_cloud_index){
+  b_url <- paste0("/vsicurl/", landsat_obj$features[[min_cloud_index]]$assets$blue$href)
+  b_data <- terra::rast(b_url)
+  landsat_b = raster::raster(b_data)
+  
+  r_url <- paste0("/vsicurl/", landsat_obj$features[[min_cloud_index]]$assets$red$href)
+  r_data <- terra::rast(r_url)
+  landsat_r = raster::raster(r_data)
+  
+  
+  g_url <- paste0("/vsicurl/", landsat_obj$features[[min_cloud_index]]$assets$green$href)
+  g_data <- terra::rast(g_url)
+  landsat_g = raster::raster(g_data)
+  print("rasters are loaded")
+  
+  #landsat_rgb=sqrt(raster::stack(landsat_r, landsat_g, landsat_b))
+  #landsat_rgb=raster::stack(landsat_r, landsat_g, landsat_b)
+  landsat_rgb <- raster::stack(landsat_r, landsat_g, landsat_b)
+  
+  # Force loading into memory
+  landsat_rgb <- sqrt(landsat_rgb)
+  
+  return(landsat_rgb)
+}
+
+#converts the  extent from the original CRS to the UTM CRS
+get_extent_utm=function(df_bbox, landast_rgb){
+  south_west = c(y=df_bbox[[1]], x=df_bbox[[2]])
+  north_east   = c(y=df_bbox[[3]], x=df_bbox[[4]])
+  
+  extent_latlong = sp::SpatialPoints(rbind(south_west,north_east),proj4string=sp::CRS("+proj=longlat +ellps=WGS84 +datum=WGS84"))
+  extent_utm = sp::spTransform(extent_latlong, raster::crs(landast_rgb))
+
+
+  e = raster::extent(extent_utm)
+  return(e)
+}
+
+#crops both the landsat raster and the nasadem rasters to the size of the bounding box created from the data frame
+crop_rasters=function(e, landsat_rbg){
+  landsat_rgb_cropped = raster::crop(landsat_rbg , e)
+
+  names(landsat_rgb_cropped) = c("r","g","b")
+  
+  landsat_r_cropped = rayshader::raster_to_matrix(landsat_rgb_cropped$r)
+  landsat_g_cropped = rayshader::raster_to_matrix(landsat_rgb_cropped$g)
+  landsat_b_cropped = rayshader::raster_to_matrix(landsat_rgb_cropped$b)
+  print("rgb is cropped")
+  
+
+  landsat_rgb_array = array(0,dim=c(nrow(landsat_r_cropped),ncol(landsat_r_cropped),3))
+  
+  landsat_rgb_array[,,1] = landsat_r_cropped/255 #Red layer
+  landsat_rgb_array[,,2] = landsat_g_cropped/255 #Blue layer
+  landsat_rgb_array[,,3] = landsat_b_cropped/255 #Green layer
+  
+  
+  landsat_rgb_array = aperm(landsat_rgb_array, c(2,1,3))
+  
+  return(landsat_rgb_array)
+}
+
+
+```
+
+
+
+```{r}
+get_landsat_rgb=function(data){
+  df=data
+  ########################
+  #get and crop elevation 
+  #and landsat data
+  #######################
+  #make bounding box
+  df_bbox=make_bbox(df)
+  print("bbox made")
+  
+  #make merged tile polygon and return the rows and paths of the Landsat tiles that cover the study bounding box
+  temp=merge_tiles(df_bbox)
+  merged_tile=temp[[1]]
+  paths_rows=temp[[2]]
+  bounding_box_polygon=temp[[3]]
+  print("multi-tile polygon made")
+  
+  #plot the tiles
+  plot(merged_tile)
+  plot(bounding_box_polygon, add=TRUE)
+
+
+  #make time interval form start to end of study
+  time_interval=make_time_interval(df)
+  
+  # get landsat api end point
+  landsat_obj=get_landsat(df_bbox, time_interval)
+  
+  #This nested for loop will find the lansat rasters that have the min cloud cover over the study area
+  min_cloud_indices=list()
+  for(i in 1:length(paths_rows)){
+    path=paths_rows[[i]][[1]]
+    row=paths_rows[[i]][[2]]
+    indexes_of_intrest=list()
+    for(j in 1:length(landsat_obj$features)){
+      if((as.integer(landsat_obj$features[[j]]$properties$`landsat:wrs_path`)==path) & (as.integer(landsat_obj$features[[j]]$properties$`landsat:wrs_row`)==row)){
+        indexes_of_intrest=append(indexes_of_intrest,j)
+      }
+    }
+    min_cloud_index=find_min_cloud(landsat_obj,indexes_of_intrest)
+    min_cloud_indices=append(min_cloud_indices,min_cloud_index)
+  }
+  
+  
+  # load the rgb rasters
+  landsat_tiles=list()
+  j=1
+  for(i in min_cloud_indices){
+    print(paste0("loading tile ", j," of ", length(min_cloud_indices)))
+    temp_rgb_raster=make_landsat_rgb(landsat_obj, i)
+    
+    landsat_tiles = append(landsat_tiles, temp_rgb_raster)
+    j=j+1
+  }
+  
+  # Merge the rgb rasters into one large raster
+  print("merging rasters")
+  if(length(landsat_tiles)>1){
+    names(landsat_tiles)[1:2] <- c('x', 'y')
+    landsat_tiles$fun <- mean
+    landsat_tiles$na.rm <- TRUE
+    
+    merged_rgb <- do.call(mosaic, landsat_tiles)
+  }else{
+    merged_rgb=landsat_tiles[[1]]
+  }
+  print("rasters merged")
+  #plot the raster
+  #raster::plotRGB(merged_rgb)
+  
+  #convert the crs of the elevation data to the landsat raster data crs
+  #elevation_utm=raster::projectRaster(elevation_data, merged_rgb , crs=crs(merged_rgb , asText=TRUE), method='bilinear')
+  
+  #convert the extent of bounding box of the study from lat,long to UTM
+  e=get_extent_utm(df_bbox,merged_rgb)
+  e
+  # cropt the elevation raster and landsat raster to the size of the study area
+  landsat_rgb_array=crop_rasters(e, merged_rgb)
+  print("rasters cropped")
+  
+  
+  # increase the contrast of the RGB landsat raster
+  landsat_rgb_contrast = scales::rescale(landsat_rgb_array,to=c(0,1))
+  print("colors corrected")
+  #make raster brick for the RGB 
+  landsat_rgb_cropped=raster::brick(landsat_rgb_contrast)
+  extent(landsat_rgb_cropped)=e #set extent 
+  crs(landsat_rgb_cropped)=crs(merged_rgb, asText=TRUE) #set CRS
+  
+  #plot the cropped raster
+  #plotRGB(landsat_rgb_cropped, r = 1, g = 2, b = 3, scale = maxValue(landsat_rgb_cropped))
+  return(landsat_rgb_cropped)
+}
+```
+
+
+```{r}
+#############
+#example data sets
+############
+#DATA=read.csv("movebank_data/Movement patterns of seed dispersing spotted nutcrackers (Nucifraga caryocatactes).csv")
+DATA=read.csv('movebank_data/Barn Owl Breeding Napa Valley California.csv')
+#DATA=read.csv('movebank_data/Hornbill telemetry in northeast India.csv')
+#data(buffalo)
+#DATA=buffalo
+#DATA=buffalo$Cilla
+```
+
+```{r}
+
+#both movebank data frames and ctmm telemetry objects will work
+landsat_rgb=get_landsat_rgb(DATA)
+plotRGB(landsat_rgb, r = 1, g = 2, b = 3, scale = maxValue(landsat_rgb))
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
